@@ -1,0 +1,327 @@
+#!/usr/bin/env python
+
+# author: Tomas Bouchal
+# version: 20.10.18
+
+# MASARYK UNIVERSITY
+# Faculty of Science
+# National Centre for Biomolecular Research
+# Laboratory of Computional Chemistry
+
+import subprocess
+import sys
+import os.path
+import math
+import os
+
+class Gamber:
+	"""
+	Gamber (abreviation for gaussian-amber) 
+
+	Wrapper for gaussian QM/MM optimization using gradients and energies
+	calculated by sander.PMF/orca 
+	Note for PK: sander.PMF has to create ene_forces_byTB.dat with energies,gradients and coordinates 
+	
+	needs gamber input file as argument (only argument) rest of arguments is given by gaussian external
+
+	format of input file:
+	first line should contain words OPT, RESTRAINTS
+	OPT			   	- running optimization only
+	RESTRAINTS			- adds restraints contribution
+
+	other lines should contain keywords for filename in format
+	parmfile = filename	   	- (mandatory)
+				   	- specifies topology file name
+	qmmmfile = filename	   	- (mandatory)
+				   	- specifies amber input name for qmmm calculation
+	referencefile = filename	- (mandatory for RESTRAINTS option)
+					- specifies reference amber coordinate file
+	"""
+	def __init__(self, gamber_input,g_input,g_output):
+		"""
+		parameters:
+			gamber_input (str)	- gamber input specification file for QMMM calculation
+			g_input (str)     	- name of the file Gaussian has prepared as input for the external program
+			g_output (str)		- name of the file which should be read in after the external program completes
+		"""
+		self.errors = Gambererrors(gamber_input) #loads gamber exceptions
+		self.gamber_input = gamber_input	
+		self.g_input = g_input	
+		self.g_output = g_output
+		##### CONSTANTS #####
+		self.au2angs = 0.5291772083 #  au to Angstroms
+		self.hartree = 4.35974381E-18 # au to J
+		self.avogadro = 6.02214199E+23 # Avogadro constant
+		self.jpk = 4.184E+03  # 1 kcal is 4181 KJ
+		self.kph = self.hartree * self.avogadro / self.jpk
+		self.factf = - self.au2angs / self.kph
+
+	def read_gamber_input(self):
+		"""
+		reads gamber input file with job specification
+		returns:
+			keywords (list) 	- of specification how to launch sander (str)
+			files (dictionary) 	- files types as keys(str), filenames as values (str) 
+		"""
+		keywords = []		
+		files = {}
+		f=open(self.gamber_input)
+		switcher = True
+		for tline in f:
+			line = tline[0:-1].strip()
+			if line == "":
+				continue
+			if switcher == False:
+				infiles = line.split("=")
+				file_type = infiles[0].strip()
+				file_name = infiles[1].strip()
+				files[file_type] = file_name
+				self.errors.wrong_type(file_type, file_name)
+					
+			if switcher == True:
+				keywords = line.split()
+				for item in keywords:
+					self.errors.wrong_key(item)
+				switcher = False
+		self.errors.input_files(keywords,files)		
+		return keywords, files
+
+	def read_ginput_file(self):
+		"""
+		reads atoms from inputfile provided by gaussian
+		returns:
+			number_of_atom (int) 	- number of atoms 
+			molecule (list) 	- atom, each atom is list(atomic number (int),x (float), y (float), z (float))
+		"""
+		f = open(self.g_input)
+		line_number = 1
+		molecule = []
+		number_of_atoms = 0
+		for tline in f:
+			if line_number == number_of_atoms + 2:
+				break
+			line = tline[0:-1]
+			spline = line.split()
+			if line_number == 1:
+			# 1. in ginput #atoms  derivatives-requested  charge  spin
+				number_of_atoms = int(spline[0])
+			else:
+			# 1+n. ginput line is:   atomic_number   x  y  z  MM-charge MM-atom_type
+				atom = []
+				atom.append(int(spline[0]))
+				atom.append(float(spline[1]))
+				atom.append(float(spline[2]))
+				atom.append(float(spline[3]))
+				molecule.append(atom)
+			line_number = line_number + 1
+		f.close()
+		return number_of_atoms, molecule
+	
+	def write_rst7_file(self, number_of_atoms, molecule):
+		"""
+		creates amber rst file
+		parameters:
+			number_of_atom (int) 	- number of atoms 
+			molecule (list) 	- atom, each atom is list(atomic number (int),x (float), y (float), z (float))	
+		"""
+		count = 1		
+		f = open(self.g_input + ".rst7", "w")
+		f.write("default_name\n")
+		f.write("%6d\n" % (number_of_atoms))
+		for atom in molecule:
+			f.write("%12.7f%12.7f%12.7f" % (atom[1] * self.au2angs, atom[2] * self.au2angs, atom[3] * self.au2angs))		
+			if count % 2 == 0:
+				f.write("\n")
+			count = count + 1
+		if number_of_atoms % 2 == 1:
+			f.write("\n")
+		f.close()
+		return 0 
+	
+	def write_traj_snapshot(self, number_of_atoms, molecule):
+		"""
+		creates file trajectory.xyz (if not exists) and writes actual coordinates in xyz format
+		parameters:
+			number_of_atom (int) 	- number of atoms 
+			molecule (list) 	- atom, each atom is list(atomic number (int),x (float), y (float), z (float))	
+		"""
+		atom_templates = {1:"H", 20:"Ca", 6:"C", 7:"N", 8:"O", 15:"P", 16:"S" }
+		f = open("trajectory.xyz", "a")
+		f.write("%d\n" % (number_of_atoms))
+		f.write("   molecule\n")
+		for atom in molecule:
+			f.write("%5s %14.6f%14.6f%14.6f\n" % (atom_templates[atom[0]],atom[0]/self.factf, atom[1]/self.factf, atom[2]/self.factf))
+		f.close()
+		return 0
+
+	def write_goutput(self, energies, gradients):
+		"""
+		createss gaussian output file read by gaussian
+		parameters:		
+			energies - list - values of energy of each energy term (float) 
+			gradients - list - values of atomic gradients (float)
+		"""
+		f = open(self.g_output, "w")
+		f.write("%20.12e%20.12e%20.12e%20.12e\n" % (energies[0], 0.0, 0.0, 0.0))
+		for atom in gradients:
+			f.write("%20.12e%20.12e%20.12e\n" % (atom[0], atom[1], atom[2]))
+		f.close()
+		return 0
+
+	def write_enes(self, energies, energy_terms):
+		"""
+		creates file enes (if not exists) and writes actual energy of molecule
+		parameters:
+			energie (list)	 	- values of energy of each energy term (float) 
+			gradients (list) 	- values of atomic gradients (float) 
+		"""
+		if not os.path.isfile("enes"):
+			f = open("enes", "w")
+			f.write("# Step")
+			for i in range(0,17):
+				f.write("%15str" % ("E_"+energy_terms[i]) )
+			f.write("\n")
+			f.write("#  1  ")
+			for i in range(2,19):
+				f.write("%15d" % (i) )
+			f.write("\n")
+			f.write("#" + "-"*260 + "\n")
+			f.close()
+		step = len(open("enes").readlines())
+		f = open("enes", "a")
+		f.write(" %5d" % (int(math.fabs(step-2))) ) # MINIMIZATION STEP
+		for item in energies:
+			ene = item*self.kph
+			f.write("%15.4f" % (ene))
+		f.write('\n')
+		f.close()
+		return 0
+	
+	def run_sanderPMF(self, keywords, files):
+		"""
+		runs QMMM calculation in sander.PMF
+		parameters:
+			keywords (list) 	- of specification how to launch sander (str)
+			files (dictionary) 	- files types as keys(str), filenames as values (str) 
+		"""
+		if "RESTRAINTS" in keywords:
+			restraints="-ref"
+			reffile=files["referencefile"]
+		else: 
+			restraints=""
+			reffile=""
+		inpcrd = self.g_input + ".rst7"		
+		subprocess.Popen(["sander.PMF", "-O", "-i", files["qmmmfile"], "-o", "qmmm.out", "-p", files["parmfile"], "-c", inpcrd, "-r", "min.rst", restraints, reffile]).communicate()
+		self.errors.sander_output("ene_forces_byTB.dat")
+		os.rename("ene_forces_byTB.dat", "ene_forces_qmmm")		
+		return 0
+
+	def extract_ene_grads_coords(self,enefile):
+		"""
+		extracts energies and gradients from output file created by sander.PMF
+		parameters:
+			enefile (str) 		- sander.PMF output file with energy decomposition, atomic gradients and coordinates		
+		returns:
+			energie (list)	 	- values of energy of each energy term (float) 
+			energy_terms (list) 	- energy terms (string)
+			gradients (list) 	- values of atomic gradients (float) 
+		"""
+		f = open(enefile) # sander ene_grad_coord_file
+		energies = []
+		energy_terms = []
+		gradients = []
+		read_ene = False 
+		read_grad = False
+		read_coord = False
+		for tline in f:
+			line = tline[0:-1]
+			splitter = line.split()
+			#### SET READERS ####
+			if "GRADIENTS" in line:
+				read_ene = False
+			if "COORDINATES" in line:
+				read_grad = False
+			#### READ ENES ####
+			if read_ene == True:
+				esplit = line.split('#')
+				energies.append(float(esplit[0]) / self.kph)
+				if esplit[1] not in energy_terms:
+					energy_terms.append(str(esplit[1]))
+			#### READ GRADIENTS #### 
+			if len(splitter) == 3 and read_grad == True:
+				atomgrad = [-float(splitter[0]) * self.factf,-float(splitter[1]) * self.factf,-float(splitter[2]) * self.factf]
+				gradients.append(atomgrad)
+			#### SET READERS ####
+			if "ENERGIES" in line:
+				read_ene = True
+			if "GRADIENTS" in line:
+				read_grad = True
+		f.close()
+		return energies,energy_terms, gradients
+
+
+class Gambererrors:
+	def __init__(self, gamber_input):
+		try:
+			if not os.path.isfile(gamber_input):
+				raise IOError("GAMBER INPUT FILE DOES NOT EXIST")	
+			self.possible_keys = ("OPT", "RESTRAINTS")
+			self.possible_types = ("parmfile", "qmmmfile", "referencefile")
+		except IOError:
+			raise
+			sys.exit(1)
+			
+			
+	def wrong_key(self, keyword):
+		try:
+			if keyword not in self.possible_keys:
+				raise ValueError("KEYWORD '"+keyword+"' DONT EXIST")
+		except ValueError:
+			raise 
+			sys.exit(1)
+	
+	def wrong_type(self, file_type, file_name):
+		try:
+			if file_type not in self.possible_types:
+				raise ValueError("FILE TYPE '"+file_type+"' DONT EXIST")
+			if not os.path.isfile(file_name):
+				raise IOError("FILE '"+ file_name +"' DOES NOT EXIST")
+		except ValueError:
+			raise 
+			sys.exit(1)
+		except IOError:
+			raise 
+			sys.exit(1)
+	
+	def input_files(self,keywords,files):
+		try:   
+			if "parmfile" not in files:
+				raise ValueError("PARM7 FILE IS NOT SPECIFIED")
+			if "qmmmfile" not in files:
+				raise ValueError("QMMM FILE IS NOT SPECIFIED")
+			if "RESTRAINTS" in keywords and "referencefile" not in files:
+				raise ValueError("REFERENCE FILE IS NOT SPECIFIED")
+			if "RESTRAINTS" not in keywords and "referencefile" in files:
+				raise ValueError("REFERENCE FILE IS SPECIFIED BUT KEYWORD RESTRAINTS IS NOT USED")
+		except:
+			raise
+			sys.exit(1)
+
+	def sander_output(self,filename):
+		try:
+			if not os.path.isfile(filename):
+				raise IOError("SANDER FAILED TO CALCULATE QMMM")	
+		except IOError:
+			raise
+			sys.exit(1)
+
+gamber = Gamber(sys.argv[1], sys.argv[3], sys.argv[4])
+keywords, files = gamber.read_gamber_input()
+number_of_atoms, molecule = gamber.read_ginput_file()
+gamber.write_rst7_file(number_of_atoms, molecule)	
+gamber.run_sanderPMF(keywords, files)
+energies,energy_terms,gradients = gamber.extract_ene_grads_coords("ene_forces_qmmm")
+gamber.write_traj_snapshot(number_of_atoms, molecule)
+gamber.write_goutput(energies, gradients)
+gamber.write_enes(energies, energy_terms)
+	
