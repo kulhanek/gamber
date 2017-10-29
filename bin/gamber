@@ -18,9 +18,7 @@ class Gamber:
 	"""
 	Gamber (abreviation for gaussian-amber) 
 
-	Wrapper for gaussian QM/MM optimization using gradients and energies
-	calculated by sander.PMF/orca 
-	Note for PK: sander.PMF has to create ene_forces_byTB.dat with energies,gradients and coordinates 
+	Wrapper for gaussian optimization using gradients and energies calculated by sander.PMF
 	
 	needs gamber input file as argument (only argument) rest of arguments is given by gaussian external
 
@@ -32,15 +30,15 @@ class Gamber:
 	other lines should contain keywords for filename in format
 	parmfile = filename	   	- (mandatory)
 				   	- specifies topology file name
-	qmmmfile = filename	   	- (mandatory)
-				   	- specifies amber input name for qmmm calculation
+	ctrlfile = filename	   	- (mandatory)
+				   	- specifies amber input name for sander.PMF calculation
 	referencefile = filename	- (mandatory for RESTRAINTS option)
 					- specifies reference amber coordinate file
 	"""
 	def __init__(self, gamber_input,g_input,g_output):
 		"""
 		parameters:
-			gamber_input (str)	- gamber input specification file for QMMM calculation
+			gamber_input (str)	- gamber input specification file for gamber calculation
 			g_input (str)     	- name of the file Gaussian has prepared as input for the external program
 			g_output (str)		- name of the file which should be read in after the external program completes
 		"""
@@ -150,7 +148,7 @@ class Gamber:
 		f.write("%d\n" % (number_of_atoms))
 		f.write("   molecule\n")
 		for atom in molecule:
-			f.write("%5s %14.6f%14.6f%14.6f\n" % (atom_templates[atom[0]],atom[0]/self.factf, atom[1]/self.factf, atom[2]/self.factf))
+			f.write("%5s %14.6f%14.6f%14.6f\n" % (atom_templates[atom[0]],atom[1], atom[2], atom[3]))
 		f.close()
 		return 0
 
@@ -199,7 +197,7 @@ class Gamber:
 	
 	def run_sanderPMF(self, keywords, files):
 		"""
-		runs QMMM calculation in sander.PMF
+		runs calculation in sander.PMF
 		parameters:
 			keywords (list) 	- of specification how to launch sander (str)
 			files (dictionary) 	- files types as keys(str), filenames as values (str) 
@@ -211,9 +209,8 @@ class Gamber:
 			restraints=""
 			reffile=""
 		inpcrd = self.g_input + ".rst7"		
-		subprocess.Popen(["sander.PMF", "-O", "-i", files["qmmmfile"], "-o", "qmmm.out", "-p", files["parmfile"], "-c", inpcrd, "-r", "min.rst", restraints, reffile]).communicate()
-		self.errors.sander_output("ene_forces_byTB.dat")
-		os.rename("ene_forces_byTB.dat", "ene_forces_qmmm")		
+		subprocess.Popen(["sander.PMF", "-O", "-i", files["ctrlfile"], "-o", "sander.out", "-p", files["parmfile"], "-c", inpcrd, "-r", "min.rst", restraints, reffile]).communicate()
+		self.errors.sander_output("ene_forces_byTB.dat")	
 		return 0
 
 	def extract_ene_grads_coords(self,enefile):
@@ -266,7 +263,7 @@ class Gambererrors:
 			if not os.path.isfile(gamber_input):
 				raise IOError("GAMBER INPUT FILE DOES NOT EXIST")	
 			self.possible_keys = ("OPT", "RESTRAINTS")
-			self.possible_types = ("parmfile", "qmmmfile", "referencefile")
+			self.possible_types = ("parmfile", "ctrlfile", "referencefile")
 		except IOError:
 			raise
 			sys.exit(1)
@@ -297,8 +294,8 @@ class Gambererrors:
 		try:   
 			if "parmfile" not in files:
 				raise ValueError("PARM7 FILE IS NOT SPECIFIED")
-			if "qmmmfile" not in files:
-				raise ValueError("QMMM FILE IS NOT SPECIFIED")
+			if "ctrlfile" not in files:
+				raise ValueError("CONTROL FILE IS NOT SPECIFIED")
 			if "RESTRAINTS" in keywords and "referencefile" not in files:
 				raise ValueError("REFERENCE FILE IS NOT SPECIFIED")
 			if "RESTRAINTS" not in keywords and "referencefile" in files:
@@ -310,7 +307,7 @@ class Gambererrors:
 	def sander_output(self,filename):
 		try:
 			if not os.path.isfile(filename):
-				raise IOError("SANDER FAILED TO CALCULATE QMMM")	
+				raise IOError("SANDER.PMF RUN FAILED!")	
 		except IOError:
 			raise
 			sys.exit(1)
@@ -320,7 +317,7 @@ keywords, files = gamber.read_gamber_input()
 number_of_atoms, molecule = gamber.read_ginput_file()
 gamber.write_rst7_file(number_of_atoms, molecule)	
 gamber.run_sanderPMF(keywords, files)
-energies,energy_terms,gradients = gamber.extract_ene_grads_coords("ene_forces_qmmm")
+energies,energy_terms,gradients = gamber.extract_ene_grads_coords("ene_forces_byTB.dat")
 gamber.write_traj_snapshot(number_of_atoms, molecule)
 gamber.write_goutput(energies, gradients)
 gamber.write_enes(energies, energy_terms)
