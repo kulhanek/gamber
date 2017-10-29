@@ -148,7 +148,7 @@ class Gamber:
 		f.write("%d\n" % (number_of_atoms))
 		f.write("   molecule\n")
 		for atom in molecule:
-			f.write("%5s %14.6f%14.6f%14.6f\n" % (atom_templates[atom[0]],atom[1], atom[2], atom[3]))
+			f.write("%5s %14.6f%14.6f%14.6f\n" % (atom_templates[atom[0]],atom[1]*self.au2angs, atom[2]*self.au2angs, atom[3]*self.au2angs))
 		f.close()
 		return 0
 

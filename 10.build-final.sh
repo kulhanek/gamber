@@ -50,9 +50,9 @@ cat > $SOFTBLDS/$NAME:$VERS:$ARCH:$MODE.bld << EOF
         <variable name="AMS_PACKAGE_DIR" value="$PREFIX/$NAME/$VERS/$ARCH/$MODE" operation="set" priority="modaction"/>
         <variable name="PATH" value="\$SOFTREPO/$PREFIX/$NAME/$VERS/$ARCH/$MODE/bin" operation="prepend"/>
     </setup>
-    <deps>
+<!--    <deps>
         <dep name="anaconda3" type="pre"/>
-    </deps>
+    </deps> -->
 </build>
 EOF
 if [ $? -ne 0 ]; then exit 1; fi
