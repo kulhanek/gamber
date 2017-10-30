@@ -170,20 +170,23 @@ class Gamber:
 		"""
 		creates file enes (if not exists) and writes actual energy of molecule
 		parameters:
-			energie (list)	 	- values of energy of each energy term (float) 
-			gradients (list) 	- values of atomic gradients (float) 
+			energies (list)	 	- values of energy of each energy term (float) 
+			energy_terms (list) 	- energy terms (string)
 		"""
 		if not os.path.isfile("enes"):
 			f = open("enes", "w")
 			f.write("# Step")
 			for i in range(0,17):
-				f.write("%15str" % ("E_"+energy_terms[i]) )
+				f.write("%15s" % ("E_"+energy_terms[i]) )
 			f.write("\n")
 			f.write("#  1  ")
 			for i in range(2,19):
 				f.write("%15d" % (i) )
 			f.write("\n")
-			f.write("#" + "-"*260 + "\n")
+			f.write("#-----")
+			for i in range(2,19):
+				f.write(" "+"-"*14 )
+			f.write("\n")
 			f.close()
 		step = len(open("enes").readlines())
 		f = open("enes", "a")
@@ -219,7 +222,7 @@ class Gamber:
 		parameters:
 			enefile (str) 		- sander.PMF output file with energy decomposition, atomic gradients and coordinates		
 		returns:
-			energie (list)	 	- values of energy of each energy term (float) 
+			energies (list)	 	- values of energy of each energy term (float) 
 			energy_terms (list) 	- energy terms (string)
 			gradients (list) 	- values of atomic gradients (float) 
 		"""
@@ -243,7 +246,7 @@ class Gamber:
 				esplit = line.split('#')
 				energies.append(float(esplit[0]) / self.kph)
 				if esplit[1] not in energy_terms:
-					energy_terms.append(str(esplit[1]))
+					energy_terms.append(str(esplit[1]).strip())
 			#### READ GRADIENTS #### 
 			if len(splitter) == 3 and read_grad == True:
 				atomgrad = [-float(splitter[0]) * self.factf,-float(splitter[1]) * self.factf,-float(splitter[2]) * self.factf]
@@ -254,6 +257,7 @@ class Gamber:
 			if "GRADIENTS" in line:
 				read_grad = True
 		f.close()
+		
 		return energies,energy_terms, gradients
 
 
